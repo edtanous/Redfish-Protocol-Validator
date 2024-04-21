@@ -6,6 +6,7 @@
 import logging
 from urllib.parse import urlparse
 
+import httpx
 import requests
 
 from redfish_protocol_validator import utils
@@ -13,18 +14,18 @@ from redfish_protocol_validator.constants import Assertion, RequestType, Result
 from redfish_protocol_validator.system_under_test import SystemUnderTest
 
 
-def test_header(sut: SystemUnderTest, header, header_values, uri, assertion,
-                stream=False):
+def test_header(sut: SystemUnderTest, header, header_values, uri, assertion, stream=False):
     """Perform test for a particular header value"""
     for val in header_values:
-        response = sut.session.get(sut.rhost + uri, headers={header: val},
-                                   stream=stream)
-        if response.ok:
+        if stream:
+            with sut.session.stream("GET", sut.rhost + uri, headers={header: val}) as response:
+                pass
+        else:
+            response = sut.session.get(sut.rhost + uri, headers={header: val})
+        if response.status_code < 400:
             msg = 'Test passed for header %s: %s' % (header, val)
             sut.log(Result.PASS, 'GET', response.status_code, uri,
                     assertion, msg)
-            if stream:
-                response.close()
         elif response.status_code == requests.codes.NOT_FOUND:
             msg = ('Resource at URI %s not found; unable to test this '
                    'assertion for header %s' % (uri, header))
@@ -74,8 +75,9 @@ def test_accept_header(sut: SystemUnderTest):
             test_header(sut, header, header_values, uri, assertion,
                         stream=True)
         except Exception as e:
+            import traceback
             msg = ('Caught %s while opening SSE stream with valid '
-                   '"text/event-stream" Accept headers' % e.__class__.__name__)
+                   '"text/event-stream" Accept headers' % (e.__class__.__name__, traceback.print_exception(e)))
             sut.log(Result.FAIL, 'GET', '', uri, assertion, msg)
 
 
@@ -97,7 +99,7 @@ def test_authorization_header(sut: SystemUnderTest):
                 sut.sessions_uri, Assertion.REQ_HEADERS_AUTHORIZATION, msg)
         return
 
-    if response.ok:
+    if response.status_code < 400:
         sut.log(Result.PASS, 'GET', response.status_code, sut.sessions_uri,
                 Assertion.REQ_HEADERS_AUTHORIZATION,
                 'Test passed for header Authorization')
@@ -113,7 +115,7 @@ def test_content_type_header(sut: SystemUnderTest):
     def test_content_type(val):
         for method in ['PATCH', 'POST']:
             for uri, response in sut.get_responses_by_method(method).items():
-                if response.ok:
+                if response.status_code < 400:
                     if val == response.request.headers.get('Content-Type'):
                         sut.log(Result.PASS, method, response.status_code, uri,
                                 Assertion.REQ_HEADERS_CONTENT_TYPE,
@@ -142,11 +144,11 @@ def test_host_header(sut: SystemUnderTest):
         return
 
     # Note: We cannot confirm that the Host header was sent by looking at
-    # response.request.headers. That is because the requests package doesn't
+    # response.request.headers. That is because the httpx package doesn't
     # add the Host header; the lower-level http.client package does. But rest
     # assured that it is added.
 
-    if response.ok:
+    if response.status_code < 400:
         sut.log(Result.PASS, 'GET', response.status_code, uri,
                 Assertion.REQ_HEADERS_HOST, 'Test passed for header Host')
     else:
@@ -161,7 +163,7 @@ def test_if_match_header(sut: SystemUnderTest):
     def test_good_if_match():
         method = 'PATCH'
         for uri, response in sut.get_responses_by_method(method).items():
-            if response.ok:
+            if response.status_code < 400:
                 if 'If-Match' in response.request.headers:
                     sut.log(Result.PASS, method, response.status_code, uri,
                             Assertion.REQ_HEADERS_IF_MATCH,
@@ -199,7 +201,7 @@ def test_odata_version_header(sut: SystemUnderTest):
     # supported OData-Version
     response = sut.session.get(sut.rhost + uri,
                                headers={'OData-Version': '4.0'})
-    if response.ok:
+    if response.status_code < 400:
         msg = ('Test passed for supported header OData-Version: %s'
                % response.request.headers.get('OData-Version'))
         sut.log(Result.PASS, 'GET', response.status_code, uri,
@@ -237,7 +239,7 @@ def test_user_agent_header(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_HEADERS_USER_AGENT."""
     uri = '/redfish/v1/'
     response = sut.get_response('GET', uri)
-    if response is None or not response.ok:
+    if response is None or not response.status_code < 400:
         msg = ('No successful response for GET request to URI %s found; '
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET',
@@ -259,7 +261,7 @@ def test_user_agent_header(sut: SystemUnderTest):
 def test_x_auth_token_header(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_HEADERS_X_AUTH_TOKEN."""
     response = sut.get_response('GET', sut.sessions_uri)
-    if response is None or not response.ok:
+    if response is None or not response.status_code < 400:
         msg = ('No successful response for GET request to URI %s found; '
                'unable to test this assertion' % sut.sessions_uri)
         sut.log(Result.NOT_TESTED, 'GET',
@@ -280,9 +282,9 @@ def test_x_auth_token_header(sut: SystemUnderTest):
 def test_get_no_accept_header(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_GET_NO_ACCEPT_HEADER."""
     uri = '/redfish/v1/'
-    headers = {'Accept': None}
+    headers = {'Accept': ''}
     response = sut.session.get(sut.rhost + uri, headers=headers)
-    if response.ok:
+    if response.status_code < 400:
         if utils.get_response_media_type(response) == 'application/json':
             sut.log(Result.PASS, 'GET', response.status_code, uri,
                     Assertion.REQ_GET_NO_ACCEPT_HEADER, 'Test passed')
@@ -303,9 +305,14 @@ def test_get_no_accept_header(sut: SystemUnderTest):
 def test_get_ignore_body(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_GET_IGNORE_BODY."""
     uri = '/redfish/v1/'
-    payload = {}
-    response = sut.session.get(sut.rhost + uri, json=payload)
-    if response.ok:
+    response = sut.session.request(
+        method="GET",
+        url=sut.rhost + uri,
+        content=b"{}",
+    )
+    #payload = {}
+    #response = sut.session.get(sut.rhost + uri, json=payload)
+    if response.status_code < 400:
         sut.log(Result.PASS, 'GET', response.status_code, uri,
                 Assertion.REQ_GET_IGNORE_BODY, 'Test passed')
     else:
@@ -318,7 +325,7 @@ def test_get_collection_count_prop_required(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_GET_COLLECTION_COUNT_PROP_REQUIRED."""
     uri = sut.sessions_uri
     response = sut.get_response('GET', uri)
-    if response is None or not response.ok:
+    if response is None or not response.status_code < 400:
         msg = ('Successful response for GET request to URI %s not found; '
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET',
@@ -350,7 +357,7 @@ def test_get_collection_count_prop_total(sut: SystemUnderTest):
     # TODO(bdodd): Try to find a collection resource with more members
     uri = sut.sessions_uri
     response = sut.get_response('GET', uri)
-    if response is None or not response.ok:
+    if response is None or not response.status_code < 400:
         msg = ('Successful response for GET request to URI %s not found; '
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET',
@@ -415,7 +422,7 @@ def test_get_service_root_url(sut: SystemUnderTest):
                 Assertion.REQ_GET_SERVICE_ROOT_URL, msg)
         return
 
-    if response.ok:
+    if response.status_code < 400:
         sut.log(Result.PASS, 'GET', response.status_code, uri,
                 Assertion.REQ_GET_SERVICE_ROOT_URL, 'Test passed')
     else:
@@ -435,7 +442,7 @@ def test_get_service_root_no_auth(sut: SystemUnderTest):
                    'URL %s not found; unable to test this assertion' % uri)
             sut.log(Result.NOT_TESTED, 'GET', '', uri,
                     Assertion.REQ_GET_SERVICE_ROOT_NO_AUTH, msg)
-        elif response.ok:
+        elif response.status_code < 400:
             sut.log(Result.PASS, 'GET', response.status_code, uri,
                     Assertion.REQ_GET_SERVICE_ROOT_NO_AUTH, 'Test passed')
         else:
@@ -456,7 +463,7 @@ def test_get_metadata_uri(sut: SystemUnderTest):
                 Assertion.REQ_GET_METADATA_URI, msg)
         return
 
-    if response.ok:
+    if response.status_code < 400:
         sut.log(Result.PASS, 'GET', response.status_code, uri,
                 Assertion.REQ_GET_METADATA_URI, 'Test passed')
     else:
@@ -477,7 +484,7 @@ def test_get_odata_uri(sut: SystemUnderTest):
                 Assertion.REQ_GET_ODATA_URI, msg)
         return
 
-    if response.ok:
+    if response.status_code < 400:
         sut.log(Result.PASS, 'GET', response.status_code, uri,
                 Assertion.REQ_GET_ODATA_URI, 'Test passed')
     else:
@@ -497,7 +504,7 @@ def test_get_metadata_odata_no_auth(sut: SystemUnderTest):
                    'URI %s not found; unable to test this assertion' % uri)
             sut.log(Result.NOT_TESTED, 'GET', '', uri,
                     Assertion.REQ_GET_METADATA_ODATA_NO_AUTH, msg)
-        elif response.ok:
+        elif response.status_code < 400:
             sut.log(Result.PASS, 'GET', response.status_code, uri,
                     Assertion.REQ_GET_METADATA_ODATA_NO_AUTH, 'Test passed')
         else:
@@ -511,7 +518,7 @@ def test_query_ignore_unsupported(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_QUERY_IGNORE_UNSUPPORTED."""
     uri = '/redfish/v1/?rpvunknown'
     response = sut.session.get(sut.rhost + uri)
-    if response.ok:
+    if response.status_code < 400:
         sut.log(Result.PASS, 'GET', response.status_code, uri,
                 Assertion.REQ_QUERY_IGNORE_UNSUPPORTED, 'Test passed')
     else:
@@ -568,7 +575,7 @@ def test_query_unsupported_dollar_params(sut: SystemUnderTest):
                               utils.get_extended_error(response)))
         sut.log(Result.FAIL, 'GET', response.status_code, uri,
                 Assertion.REQ_QUERY_UNSUPPORTED_DOLLAR_PARAMS, msg)
-        if not response.ok:
+        if not response.status_code < 400:
             test_query_unsupported_dollar_params_ext_error(sut, uri, response)
 
 
@@ -610,7 +617,7 @@ def test_head_differ_from_get(sut: SystemUnderTest):
                % uri)
         sut.log(Result.NOT_TESTED, 'HEAD', '', uri,
                 Assertion.REQ_HEAD_DIFFERS_FROM_GET, msg)
-    elif response.ok:
+    elif response.status_code < 400:
         if not response.text:
             sut.log(Result.PASS, 'HEAD', response.status_code, uri,
                     Assertion.REQ_HEAD_DIFFERS_FROM_GET, 'Test passed')
@@ -637,7 +644,7 @@ def test_data_mod_errors(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_DATA_MOD_ERRORS."""
     found_error = False
     for uri, response in sut.get_responses_by_method('POST').items():
-        if (not response.ok and
+        if (not response.status_code < 400 and
                 response.status_code != requests.codes.METHOD_NOT_ALLOWED):
             found_error = True
             if response.headers.get('Location'):
@@ -821,7 +828,7 @@ def patch_array_save(sut: SystemUnderTest):
     array = None
     if sut.mgr_net_proto_uri:
         response = sut.get_response('GET', sut.mgr_net_proto_uri)
-        if response is not None and response.ok:
+        if response is not None and response.status_code < 400:
             a = response.json().get('NTP', {}).get('NTPServers', None)
             if isinstance(a, list):
                 array = a
@@ -849,12 +856,12 @@ def test_patch_array_element_remove(sut: SystemUnderTest):
     uri = sut.mgr_net_proto_uri
     headers = utils.get_etag_header(sut, sut.session, uri)
     response = sut.patch(uri, json=payload1, headers=headers)
-    if response.ok:
+    if response.status_code < 400:
         headers = utils.get_etag_header(sut, sut.session, uri)
         response = sut.patch(uri, json=payload2, headers=headers)
-        if response.ok:
+        if response.status_code < 400:
             get_resp = sut.session.get(sut.rhost + uri)
-            if get_resp.ok:
+            if get_resp.status_code < 400:
                 array = get_resp.json().get('NTP', {}).get('NTPServers', None)
             else:
                 array = response.json().get('NTP', {}).get('NTPServers', None)
@@ -912,12 +919,12 @@ def test_patch_array_element_unchanged(sut: SystemUnderTest):
     uri = sut.mgr_net_proto_uri
     headers = utils.get_etag_header(sut, sut.session, uri)
     response = sut.patch(uri, json=payload1, headers=headers)
-    if response.ok:
+    if response.status_code < 400:
         headers = utils.get_etag_header(sut, sut.session, uri)
         response = sut.patch(uri, json=payload2, headers=headers)
-        if response.ok:
+        if response.status_code < 400:
             get_resp = sut.session.get(sut.rhost + uri)
-            if get_resp.ok:
+            if get_resp.status_code < 400:
                 array = get_resp.json().get('NTP', {}).get('NTPServers', None)
             else:
                 array = response.json().get('NTP', {}).get('NTPServers', None)
@@ -983,12 +990,12 @@ def test_patch_array_truncate(sut: SystemUnderTest):
     uri = sut.mgr_net_proto_uri
     headers = utils.get_etag_header(sut, sut.session, uri)
     response = sut.patch(uri, json=payload1, headers=headers)
-    if response.ok:
+    if response.status_code < 400:
         headers = utils.get_etag_header(sut, sut.session, uri)
         response = sut.patch(uri, json=payload2, headers=headers)
-        if response.ok:
+        if response.status_code < 400:
             get_resp = sut.session.get(sut.rhost + uri)
-            if get_resp.ok:
+            if get_resp.status_code < 400:
                 array = get_resp.json().get('NTP', {}).get('NTPServers', None)
             else:
                 array = response.json().get('NTP', {}).get('NTPServers', None)
@@ -1040,7 +1047,7 @@ def patch_array_restore(sut: SystemUnderTest, array):
     }
     headers = utils.get_etag_header(sut, sut.session, uri)
     response = sut.patch(uri, json=payload, headers=headers)
-    if not response.ok:
+    if not response.status_code < 400:
         logging.warning('Attempt to PATCH %s to restore the original '
                         'NTPServers array failed with status %s; PATCH '
                         'payload: %s' % (uri, response.status_code, payload))
@@ -1059,7 +1066,7 @@ def test_post_create_via_collection(sut: SystemUnderTest):
                'this assertion')
         sut.log(Result.NOT_TESTED, 'POST', '', sut.sessions_uri,
                 Assertion.REQ_POST_CREATE_VIA_COLLECTION, msg)
-    elif response.ok:
+    elif response.status_code < 400:
         sut.log(Result.PASS, 'POST', response.status_code, sut.sessions_uri,
                 Assertion.REQ_POST_CREATE_VIA_COLLECTION, 'Test passed')
     else:
@@ -1072,7 +1079,7 @@ def test_post_create_via_collection(sut: SystemUnderTest):
 def test_post_create_uri_in_location_hdr(sut: SystemUnderTest):
     """Perform tests for Assertion.REQ_POST_CREATE_URI_IN_LOCATION_HDR."""
     response = sut.get_response('POST', sut.sessions_uri)
-    if response is None or not response.ok:
+    if response is None or not response.status_code < 400:
         msg = ('No successful response found for POST to Sessions URI; '
                'unable to test this assertion')
         status = response.status_code if response is not None else ''
@@ -1106,9 +1113,9 @@ def test_post_create_to_members_prop(sut: SystemUnderTest):
         'OData-Version': '4.0',
         'Content-Type': 'application/json;charset=utf-8'
     }
-    response = requests.post(sut.rhost + uri, json=payload, headers=headers,
+    response = httpx.post(sut.rhost + uri, json=payload, headers=headers,
                              verify=sut.verify)
-    if response.ok:
+    if response.status_code < 400:
         sut.log(Result.PASS, 'POST', response.status_code, uri,
                 Assertion.REQ_POST_CREATE_TO_MEMBERS_PROP,
                 'Test passed')
@@ -1135,7 +1142,7 @@ def test_post_create_not_supported(sut: SystemUnderTest):
                'this assertion')
         sut.log(Result.NOT_TESTED, 'POST', '', sut.accounts_uri,
                 Assertion.REQ_POST_CREATE_NOT_SUPPORTED, msg)
-    elif response.ok:
+    elif response.status_code < 400:
         sut.log(Result.PASS, 'POST', response.status_code, sut.accounts_uri,
                 Assertion.REQ_POST_CREATE_NOT_SUPPORTED,
                 'Service supports creation of resources')
@@ -1189,23 +1196,23 @@ def test_post_create_not_idempotent(sut: SystemUnderTest):
         'OData-Version': '4.0',
         'Content-Type': 'application/json;charset=utf-8'
     }
-    r1 = requests.post(sut.rhost + uri, json=payload, headers=headers,
+    r1 = httpx.post(sut.rhost + uri, json=payload, headers=headers,
                        verify=sut.verify)
-    if r1.ok:
+    if r1.status_code < 400:
         loc1 = r1.headers.get('Location')
         session_uri1 = ''
         if loc1 and isinstance(loc1, str):
             session_uri1 = urlparse(loc1).path
-        r2 = requests.post(sut.rhost + uri, json=payload, headers=headers,
+        r2 = httpx.post(sut.rhost + uri, json=payload, headers=headers,
                            verify=sut.verify)
-        if r2.ok:
+        if r2.status_code < 400:
             loc2 = r2.headers.get('Location')
             session_uri2 = ''
             if loc2 and isinstance(loc2, str):
                 session_uri2 = urlparse(loc2).path
                 if loc1 == loc2:
                     # FAIL
-                    msg = ('Two consecutive POST requests to %s succeeded, '
+                    msg = ('Two consecutive POST httpx to %s succeeded, '
                            'but each returned the same resource URI in the '
                            'Location header (%s)' % (uri, loc1))
                     sut.log(Result.FAIL, 'POST', r2.status_code, uri,
@@ -1242,7 +1249,7 @@ def test_delete_method_required(sut: SystemUnderTest):
     passed = False
     fail_uri, fail_response = None, None
     for uri, response in sut.get_responses_by_method('DELETE').items():
-        if response.ok:
+        if response.status_code < 400:
             sut.log(Result.PASS, 'DELETE', response.status_code, uri,
                     Assertion.REQ_DELETE_METHOD_REQUIRED, 'Test passed')
             passed = True
@@ -1274,7 +1281,7 @@ def test_delete_non_deletable_resource(sut: SystemUnderTest):
                     Assertion.REQ_DELETE_NON_DELETABLE_RESOURCE, 'Test passed')
             passed = True
             break
-        elif not response.ok:
+        elif not response.status_code < 400:
             warn_uri, warn_response = uri, response
         else:
             fail_uri, fail_response = uri, response
@@ -1316,7 +1323,7 @@ def test_request_headers(sut: SystemUnderTest):
 
 
 def test_get(sut: SystemUnderTest):
-    """Perform tests from the 'GET (read requests)' sub-section of the spec."""
+    """Perform tests from the 'GET (read httpx)' sub-section of the spec."""
     test_get_no_accept_header(sut)
     test_get_ignore_body(sut)
     test_get_collection_count_prop_required(sut)
@@ -1348,7 +1355,7 @@ def test_head(sut: SystemUnderTest):
 
 
 def test_data_modification(sut: SystemUnderTest):
-    """Perform tests from the 'Data modification requests' sub-section of the
+    """Perform tests from the 'Data modification httpx' sub-section of the
     spec."""
     test_data_mod_errors(sut)
 
@@ -1400,7 +1407,7 @@ def test_post_action(sut: SystemUnderTest):
 
 
 def test_service_requests(sut: SystemUnderTest):
-    """Perform tests from the 'Service requests' section of the spec."""
+    """Perform tests from the 'Service httpx' section of the spec."""
     test_request_headers(sut)
     test_get(sut)
     test_query_params(sut)

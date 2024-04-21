@@ -7,6 +7,7 @@ import json
 import time
 from urllib.parse import urlparse
 
+import httpx
 import requests
 
 from redfish_protocol_validator import utils
@@ -76,7 +77,7 @@ def test_event_error_on_bad_request(sut: SystemUnderTest):
         response = sut.post(sut.subscriptions_uri, json=payload)
         sut.add_response(sut.subscriptions_uri, response,
                          request_type=RequestType.SUBSCRIPTION)
-        if response.ok:
+        if response.status_code < 400:
             msg = ('Event subscription request with bad Protocol parameter '
                    '(FTP) to %s returned status code %s; expected %s' % (
                        sut.subscriptions_uri, response.status_code,
@@ -127,7 +128,7 @@ def test_event_error_on_mutually_excl_props(sut: SystemUnderTest):
         response = sut.post(sut.subscriptions_uri, json=payload)
         sut.add_response(sut.subscriptions_uri, response,
                          request_type=RequestType.SUBSCRIPTION)
-        if response.ok:
+        if response.status_code < 400:
             msg = ('Event subscription request with mutually exclusive '
                    'properties (RegistryPrefixes and MessageIds) to %s '
                    'returned status code %s; expected %s' % (
@@ -176,7 +177,7 @@ def pre_ssdp(sut: SystemUnderTest):
     # determine SSDP enabled/disabled state
     if sut.mgr_net_proto_uri:
         r = sut.session.get(sut.rhost + sut.mgr_net_proto_uri)
-        if r.ok:
+        if r.status_code < 400:
             sut.add_response(sut.mgr_net_proto_uri, r)
             d = r.json()
             if 'SSDP' in d and 'ProtocolEnabled' in d['SSDP']:
@@ -214,7 +215,7 @@ def test_ssdp_can_be_disabled(sut: SystemUnderTest):
         headers = {'If-Match': etag} if etag else {}
         r = sut.patch(sut.mgr_net_proto_uri, json=payload, headers=headers)
         r = utils.poll_task(sut, r)
-        if r.ok:
+        if r.status_code < 400:
             services = utils.discover_ssdp(search_target=SSDP_REDFISH)
             uuids = services.keys()
             if sut.service_uuid not in uuids:
@@ -495,7 +496,7 @@ def test_sse_successful_response(sut: SystemUnderTest):
     if response is None:
         response, _ = utils.get_sse_stream(sut)
 
-    if response is not None and response.ok:
+    if response is not None and response.status_code < 400:
         failed = False
         if response.status_code != requests.codes.OK:
             msg = ('Response from GET request to URL %s succeeded with status '
@@ -554,9 +555,9 @@ def test_sse_unsuccessful_response(sut: SystemUnderTest):
     response = None
     exc_name = ''
     try:
-        response = sut.session.get(sut.rhost + sut.server_sent_event_uri,
-                                   headers={'Accept': 'application/json'},
-                                   stream=True)
+        with sut.session.stream("GET", sut.rhost + sut.server_sent_event_uri,
+                                headers={'Accept': 'application/json'}) as response:
+            pass
     except Exception as e:
         exc_name = e.__class__.__name__
     if response is None:
@@ -565,7 +566,7 @@ def test_sse_unsuccessful_response(sut: SystemUnderTest):
                'code of 400 or greater' % exc_name)
         sut.log(Result.FAIL, 'GET', '', sut.server_sent_event_uri,
                 Assertion.SERV_SSE_UNSUCCESSFUL_RESPONSE, msg)
-    elif response.ok:
+    elif response.status_code < 400:
         msg = ('Response from GET request to URL %s was successful; unable to '
                'test this assertion' % sut.server_sent_event_uri)
         sut.log(Result.NOT_TESTED, 'GET', response.status_code,
@@ -713,7 +714,7 @@ def test_sse_event_dest_deleted_on_close(sut: SystemUnderTest, response):
     status = requests.codes.OK
     for i in range(60):
         r = sut.session.get(sut.rhost + sut.event_dest_uri)
-        if r.ok:
+        if r.status_code < 400:
             # resource still present
             status = r.status_code
         elif r.status_code == requests.codes.NOT_FOUND:
@@ -765,7 +766,7 @@ def test_sse_open_creates_event_dest(sut: SystemUnderTest):
 
     response, event_dest_uri = utils.get_sse_stream(sut)
 
-    if response is not None and response.ok:
+    if response is not None and response.status_code < 400:
         if event_dest_uri:
             sut.log(Result.PASS, '', '', event_dest_uri,
                     Assertion.SERV_SSE_OPEN_CREATES_EVENT_DEST,
@@ -839,7 +840,7 @@ def test_sse_close_connection_if_event_dest_deleted(
         return
 
     r = sut.delete(event_dest_uri)
-    if r.ok:
+    if r.status_code < 400:
         # give the service up to 5 seconds to close the stream
         for _ in range(5):
             time.sleep(1)

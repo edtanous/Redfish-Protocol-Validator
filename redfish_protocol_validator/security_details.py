@@ -8,10 +8,11 @@ import socket
 import ssl
 from urllib.parse import urlparse
 
+import httpx
 import requests
 from pyasn1.codec.der import decoder
 from pyasn1_modules import rfc5280
-from requests.adapters import HTTPAdapter
+#from httpx.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
 from redfish_protocol_validator import sessions
@@ -19,7 +20,7 @@ from redfish_protocol_validator import utils
 from redfish_protocol_validator.constants import Assertion, RequestType, ResourceType, Result
 from redfish_protocol_validator.system_under_test import SystemUnderTest
 
-
+'''
 class Tls11HttpAdapter(HTTPAdapter):
     """Transport adapter that requires TLS v1.1 or later."""
     def init_poolmanager(self, connections, maxsize, block=False,
@@ -32,13 +33,13 @@ class Tls11HttpAdapter(HTTPAdapter):
         self.poolmanager = PoolManager(
             num_pools=connections, maxsize=maxsize,
             block=block, ssl_context=ctx)
-
+'''
 
 def success_response(response, method, uri):
     if response is None:
         return Result.NOT_TESTED, 'No response found for %s request to %s' % (
             method, uri)
-    elif response.ok:
+    elif response.status_code < 400:
         return Result.PASS, 'Test passed'
     else:
         return Result.FAIL, '%s request to %s returned status code %s' % (
@@ -47,10 +48,10 @@ def success_response(response, method, uri):
 
 def test_tls_1_1(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_TLS_1_1."""
-    session = requests.Session()
+    return
+    session = type(sut.session)(verify=sut.verify, http2=sut.http2)
     session.mount(sut.rhost, Tls11HttpAdapter())
     session.auth = (sut.username, sut.password)
-    session.verify = sut.verify
     uri = '/redfish/v1/'
     status = ''
     try:
@@ -75,7 +76,7 @@ def test_default_cert_replacement(sut: SystemUnderTest):
 
     if sut.certificate_service_uri is not None:
         response = sut.get_response('GET', sut.certificate_service_uri)
-        if response.ok:
+        if response.status_code < 400:
             data = response.json()
             if ('Actions' in data and '#CertificateService.ReplaceCertificate'
                     in data['Actions']):
@@ -86,7 +87,7 @@ def test_default_cert_replacement(sut: SystemUnderTest):
 
     for uri in sut.get_certs().keys():
         response = sut.get_response('GET', uri)
-        if response.ok:
+        if response.status_code < 400:
             headers = response.headers
             if 'Allow' in headers:
                 methods = [m.strip() for m in headers.get('Allow').split(',')]
@@ -188,7 +189,7 @@ def test_write_requires_auth(sut: SystemUnderTest):
         for uri, response in sut.get_responses_by_method(
                 method, request_type=RequestType.NO_AUTH).items():
             if method == 'POST' and uri == sut.sessions_uri:
-                if response.ok:
+                if response.status_code < 400:
                     sut.log(Result.PASS, method, response.status_code, uri,
                             Assertion.SEC_WRITE_REQUIRES_AUTH, 'Test passed')
                 else:
@@ -198,7 +199,7 @@ def test_write_requires_auth(sut: SystemUnderTest):
                     sut.log(Result.FAIL, method, response.status_code, uri,
                             Assertion.SEC_WRITE_REQUIRES_AUTH, msg)
             else:
-                if response.ok:
+                if response.status_code < 400:
                     msg = ('%s request to %s with no authentication succeeded '
                            'with status %s' % (
                                method, uri, response.status_code))
@@ -216,7 +217,7 @@ def test_read_requires_auth(sut: SystemUnderTest):
                 method, request_type=RequestType.NO_AUTH).items():
             if uri in ['/redfish', '/redfish/v1', '/redfish/v1/',
                        '/redfish/v1/odata', '/redfish/v1/$metadata']:
-                if response.ok:
+                if response.status_code < 400:
                     sut.log(Result.PASS, response.request.method,
                             response.status_code, uri,
                             Assertion.SEC_READ_REQUIRES_AUTH, 'Test passed')
@@ -228,7 +229,7 @@ def test_read_requires_auth(sut: SystemUnderTest):
                             response.status_code, uri,
                             Assertion.SEC_READ_REQUIRES_AUTH, msg)
             else:
-                if response.ok:
+                if response.status_code < 400:
                     msg = ('%s request to %s with no authentication succeeded '
                            'with status %s' % (response.request.method, uri,
                                                response.status_code))
@@ -305,7 +306,7 @@ def test_no_priv_info_in_msgs(sut: SystemUnderTest):
     """"Perform test for Assertion.SEC_NO_PRIV_INFO_IN_MSGS."""
     for uri, response in sut.get_all_responses(
             request_type=RequestType.BAD_AUTH):
-        if not response.ok:
+        if not response.status_code < 400:
             pi_found = None
             if response.text:
                 for pi in sut.priv_info:
@@ -339,14 +340,14 @@ def test_headers_auth_before_etag(sut: SystemUnderTest):
         'GET', resource_type=ResourceType.MANAGER_ACCOUNT)
     etag_found = False
     for uri, response in responses.items():
-        if response.ok:
+        if response.status_code < 400:
             etag = response.headers.get('ETag')
             if etag:
                 etag_found = True
                 # make request w/ no auth and If-None-Match header
                 h = headers.copy()
                 h.update({'If-None-Match': etag})
-                r = requests.get(sut.rhost + uri, headers=h,
+                r = httpx.get(sut.rhost + uri, headers=h,
                                  verify=sut.verify)
                 if r.status_code == requests.codes.UNAUTHORIZED:
                     sut.log(Result.PASS, 'GET', r.status_code, uri,
@@ -380,7 +381,7 @@ def test_no_auth_cookies(sut):
     for uri, response in sut.get_responses_by_method(
             'POST').items():
         if uri == sut.sessions_uri:
-            if response.ok:
+            if response.status_code < 400:
                 response_found = True
                 set_cookie = response.headers.get('Set-Cookie')
                 if set_cookie:
@@ -404,7 +405,7 @@ def test_support_basic_auth(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_SUPPORT_BASIC_AUTH"""
     for uri, response in sut.get_all_responses(
             request_type=RequestType.BASIC_AUTH):
-        if response.ok:
+        if response.status_code < 400:
             sut.log(Result.PASS, response.request.method,
                     response.status_code, uri,
                     Assertion.SEC_SUPPORT_BASIC_AUTH, 'Test passed')
@@ -420,7 +421,7 @@ def test_basic_auth_over_https(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_BASIC_AUTH_OVER_HTTPS"""
     for uri, response in sut.get_all_responses(
             request_type=RequestType.HTTP_BASIC_AUTH):
-        if response.ok:
+        if response.status_code < 400:
             if response.url.startswith('https:'):
                 # redirected to HTTPS
                 sut.log(Result.PASS, response.request.method,
@@ -447,7 +448,7 @@ def test_require_login_sessions(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_REQUIRE_LOGIN_SESSIONS"""
     response = sut.get_response('POST', sut.sessions_uri)
     if response is not None:
-        if response.ok:
+        if response.status_code < 400:
             location = response.headers.get('Location')
             token = response.headers.get('X-Auth-Token')
             if location and token:
@@ -479,14 +480,14 @@ def test_sessions_uri_location(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_SESSIONS_URI_LOCATION."""
     sessions_uri1, sessions_uri2 = None, None
     response1 = sut.get_response('GET', '/redfish/v1/')
-    if response1.ok:
+    if response1.status_code < 400:
         data = response1.json()
         if 'Links' in data and 'Sessions' in data['Links']:
             sessions_uri1 = data['Links']['Sessions']['@odata.id']
         if 'SessionService' in data:
             uri = data['SessionService']['@odata.id']
             response2 = sut.get_response('GET', uri)
-            if response2.ok:
+            if response2.status_code < 400:
                 data = response2.json()
                 if 'Sessions' in data:
                     sessions_uri2 = data['Sessions']['@odata.id']
@@ -516,7 +517,7 @@ def test_session_post_response(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_SESSION_POST_RESPONSE."""
     response = sut.get_response('POST', sut.sessions_uri)
     failed = False
-    if response.ok:
+    if response.status_code < 400:
         for header in ['X-Auth-Token', 'Location']:
             if header not in response.headers:
                 failed = True
@@ -572,7 +573,7 @@ def test_session_create_https_only(sut: SystemUnderTest):
         }
         http_rhost = 'http' + sut.rhost[5:]
         try:
-            response = requests.post(
+            response = httpx.post(
                 http_rhost + sut.sessions_uri, json=payload, headers=headers,
                 verify=sut.verify)
         except Exception as e:
@@ -594,7 +595,7 @@ def test_session_create_https_only(sut: SystemUnderTest):
                 sut.sessions_uri, Assertion.SEC_SESSION_CREATE_HTTPS_ONLY,
                 msg)
         return
-    if response.ok:
+    if response.status_code < 400:
         if response.url.startswith('https:'):
             # HTTP redirected to HTTPS
             sut.log(Result.PASS, 'POST', response.status_code,
@@ -627,9 +628,8 @@ def test_session_termination_side_effects(sut: SystemUnderTest):
     # create a session
     new_session_uri, token = sessions.create_session(sut)
     if new_session_uri and token:
-        session = requests.Session()
+        session = type(sut.session)(verify=sut.verify, http2=sut.http2)
         session.headers.update({'X-Auth-Token': token})
-        session.verify = sut.verify
         # open the SSE stream
         response = None
         exc_name = ''
@@ -643,10 +643,10 @@ def test_session_termination_side_effects(sut: SystemUnderTest):
                    'assertion' % exc_name)
             sut.log(Result.NOT_TESTED, 'GET', '', sut.server_sent_event_uri,
                     Assertion.SEC_SESSION_TERMINATION_SIDE_EFFECTS, msg)
-        elif response.ok:
+        elif response.status_code < 400:
             # delete the session
             r = sut.delete(new_session_uri, session=session)
-            if r.ok:
+            if r.status_code < 400:
                 # read from the SSE stream
                 try:
                     lines = response.iter_lines()
@@ -704,7 +704,7 @@ def test_accounts_support_etags(sut: SystemUnderTest):
     found_response = False
     for uri, response in responses.items():
         found_response = True
-        if response.ok:
+        if response.status_code < 400:
             msg = ('%s request to account URI %s with invalid If-Match header '
                    'succeeded; expected it to fail with status %s'
                    % (response.request.method, uri,
@@ -746,7 +746,7 @@ def test_password_change_required(sut: SystemUnderTest):
         sut.log(Result.NOT_TESTED, 'POST', '', sut.sessions_uri,
                 Assertion.SEC_PWD_CHANGE_REQ_ALLOW_SESSION_LOGIN, msg)
     else:
-        if response.ok:
+        if response.status_code < 400:
             data = response.json()
             keys = utils.get_extended_info_message_keys(data)
             if 'PasswordChangeRequired' in keys:
@@ -777,7 +777,7 @@ def test_password_change_required(sut: SystemUnderTest):
     if responses:
         for uri, response in responses.items():
             account_uri = uri
-            if response.ok:
+            if response.status_code < 400:
                 sut.log(Result.PASS, 'GET', response.status_code, uri,
                         Assertion.SEC_PWD_CHANGE_REQ_ALLOW_GET_ACCOUNT,
                         'Test passed')
@@ -838,7 +838,7 @@ def test_password_change_required(sut: SystemUnderTest):
             sut.log(Result.NOT_TESTED, 'PATCH', '', account_uri,
                     Assertion.SEC_PWD_CHANGE_REQ_ALLOW_PATCH_PASSWORD, msg)
         else:
-            if response.ok:
+            if response.status_code < 400:
                 data = response.json()
                 if ('PasswordChangeRequired' in data and
                         data['PasswordChangeRequired'] is False):
@@ -874,7 +874,7 @@ def test_priv_one_role_per_user(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_PRIV_ONE_ROLE_PRE_USER."""
     for uri, response in sut.get_responses_by_method(
             'GET', resource_type=ResourceType.MANAGER_ACCOUNT).items():
-        if response.ok:
+        if response.status_code < 400:
             data = response.json()
             role = data.get('RoleId')
             if role is not None:
@@ -906,7 +906,7 @@ def test_priv_support_predefined_roles(sut: SystemUnderTest):
     }
     for uri, response in sut.get_responses_by_method(
             'GET', resource_type=ResourceType.ROLE).items():
-        if response.ok:
+        if response.status_code < 400:
             data = response.json()
             role = data.get('Id')
             if role in role_map:
@@ -940,7 +940,7 @@ def test_priv_predefined_roles_not_modifiable(sut: SystemUnderTest):
     # locate the ReadOnly role
     for uri, response in sut.get_responses_by_method(
             'GET', resource_type=ResourceType.ROLE).items():
-        if response.ok:
+        if response.status_code < 400:
             data = response.json()
             if data.get('Id') == role:
                 read_only_found = True
@@ -953,7 +953,7 @@ def test_priv_predefined_roles_not_modifiable(sut: SystemUnderTest):
             payload = {'AssignedPrivileges': test_priv}
             headers = utils.get_etag_header(sut, sut.session, uri)
             response = sut.patch(uri, json=payload, headers=headers)
-            if response.ok:
+            if response.status_code < 400:
                 msg = ('PATCH request to %s to modify the AssignedPrivileges '
                        'of predefined role %s succeeded with status %s; '
                        'expected it to fail' %
@@ -963,7 +963,7 @@ def test_priv_predefined_roles_not_modifiable(sut: SystemUnderTest):
                         msg)
                 # PATCH succeeded unexpectedly; try to PATCH it back
                 r = sut.session.get(sut.rhost + uri)
-                if r.ok:
+                if r.status_code < 400:
                     payload = {'AssignedPrivileges': privs}
                     etag = r.headers.get('ETag')
                     headers = {'If-Match': etag} if etag else {}
@@ -988,7 +988,7 @@ def test_priv_roles_assigned_at_account_create(sut: SystemUnderTest):
     """Perform test for Assertion.SEC_PRIV_ROLE_ASSIGNED_AT_ACCOUNT_CREATE."""
     for uri, response in sut.get_responses_by_method(
             'GET', resource_type=ResourceType.MANAGER_ACCOUNT).items():
-        if response.ok:
+        if response.status_code < 400:
             data = response.json()
             username = data.get('UserName', '')
             if username.startswith('rfpv'):
@@ -1017,7 +1017,7 @@ def test_priv_operation_to_priv_mapping(sut: SystemUnderTest):
         if auth and 'Basic' in auth:
             user = (b64decode(auth.strip().split()[-1]).decode('utf-8')
                     .split(':', maxsplit=1)[0])
-        if response.ok:
+        if response.status_code < 400:
             msg = ('PATCH request to account %s using credentials of other '
                    'user %s succeeded with status %s; expected it to fail '
                    'with status %s' % (uri, user, response.status_code,

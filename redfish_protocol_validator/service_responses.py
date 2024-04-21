@@ -6,6 +6,7 @@
 import io
 import xml.etree.ElementTree as ET
 
+import httpx
 import requests
 
 from redfish_protocol_validator import utils
@@ -126,7 +127,7 @@ def test_cache_control_header(sut: SystemUnderTest):
     uri = '/redfish/v1/'
     method = 'GET'
     response = sut.get_response(method, uri)
-    if response is None or not response.ok:
+    if response is None or not response.status_code < 400:
         msg = ('No successful response found for %s request to %s; unable to '
                'test this assertion' % (method, uri))
         status = response.status_code if response is not None else ''
@@ -150,7 +151,7 @@ def test_content_type_header(sut: SystemUnderTest):
     for uri, media, req_type in uri_media_types:
         if uri:
             response = sut.get_response(method, uri, request_type=req_type)
-            if response is None or not response.ok:
+            if response is None or not response.status_code < 400:
                 msg = ('No successful response found for %s request to %s; '
                        'unable to test this assertion' % (method, uri))
                 status = response.status_code if response is not None else ''
@@ -167,7 +168,7 @@ def test_etag_header(sut: SystemUnderTest):
     found_response = False
     for uri, response in sut.get_responses_by_method(
             method, resource_type=ResourceType.MANAGER_ACCOUNT).items():
-        if response.ok:
+        if response.status_code < 400:
             found_response = True
             test_header_present(sut, 'ETag', uri, method, response,
                                 Assertion.RESP_HEADERS_ETAG)
@@ -237,7 +238,7 @@ def test_link_header(sut: SystemUnderTest):
             response = sut.get_response(method, uri)
             if response is None:
                 continue
-            elif not response.ok:
+            elif not response.status_code < 400:
                 msg = ('No successful response found for %s request to %s; '
                        'unable to test this assertion' % (method, uri))
                 sut.log(Result.NOT_TESTED, method, response.status_code, uri,
@@ -298,7 +299,7 @@ def test_www_authenticate_requirement(sut: SystemUnderTest):
     """Check for HTTPBasicAuth Property"""
     response = sut.get_response('GET', sut.account_service_uri)
 
-    if (response is not None and response.ok):
+    if (response is not None and response.status_code < 400):
         data = response.json()
         key = 'HTTPBasicAuth'
         if key in data:
@@ -441,7 +442,7 @@ def test_odata_metadata_mime_type(sut: SystemUnderTest):
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET', '', uri,
                 Assertion.RESP_ODATA_METADATA_MIME_TYPE, msg)
-    elif not response.ok:
+    elif not response.status_code < 400:
         msg = ('%s request to URI %s failed with status %s'
                % ('GET', uri, response.status_code))
         sut.log(Result.FAIL, 'GET', response.status_code, uri,
@@ -471,7 +472,7 @@ def test_odata_metadata_entity_container(sut: SystemUnderTest):
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET', '', uri,
                 Assertion.RESP_ODATA_METADATA_ENTITY_CONTAINER, msg)
-    elif not response.ok:
+    elif not response.status_code < 400:
         msg = ('%s request to URI %s failed with status %s'
                % ('GET', uri, response.status_code))
         sut.log(Result.FAIL, 'GET', response.status_code, uri,
@@ -515,7 +516,7 @@ def test_odata_service_mime_type(sut: SystemUnderTest):
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET', '', uri,
                 Assertion.RESP_ODATA_SERVICE_MIME_TYPE, msg)
-    elif not response.ok:
+    elif not response.status_code < 400:
         msg = ('%s request to URI %s failed with status %s'
                % ('GET', uri, response.status_code))
         sut.log(Result.FAIL, 'GET', response.status_code, uri,
@@ -542,7 +543,7 @@ def test_odata_service_context(sut: SystemUnderTest):
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET', '', uri,
                 Assertion.RESP_ODATA_SERVICE_CONTEXT, msg)
-    elif not response.ok:
+    elif not response.status_code < 400:
         msg = ('%s request to URI %s failed with status %s'
                % ('GET', uri, response.status_code))
         sut.log(Result.FAIL, 'GET', response.status_code, uri,
@@ -570,7 +571,7 @@ def test_odata_service_value_prop(sut: SystemUnderTest):
                'unable to test this assertion' % uri)
         sut.log(Result.NOT_TESTED, 'GET', '', uri,
                 Assertion.RESP_ODATA_SERVICE_VALUE_PROP, msg)
-    elif not response.ok:
+    elif not response.status_code < 400:
         msg = ('%s request to URI %s failed with status %s'
                % ('GET', uri, response.status_code))
         sut.log(Result.FAIL, 'GET', response.status_code, uri,

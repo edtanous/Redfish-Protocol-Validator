@@ -9,7 +9,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import requests
+import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 from http.client import HTTPConnection
 
@@ -76,7 +76,7 @@ def main():
     # set up cert verify option
     verify = args.ca_bundle if args.ca_bundle else not args.no_cert_check
     if args.no_cert_check:
-        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+        urllib3.disable_warnings(InsecureRequestWarning)
 
     # create report directory if needed
     report_dir = Path(args.report_dir)

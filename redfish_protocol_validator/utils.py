@@ -13,6 +13,7 @@ import time
 from collections import namedtuple
 
 import colorama
+import httpx
 import requests
 import sseclient
 
@@ -40,14 +41,14 @@ def get_response_media_type_charset(response):
 def get_etag_header(sut, session, uri):
     response = session.get(sut.rhost + uri)
     etag = None
-    if response.ok:
+    if response.status_code < 400:
         etag = response.headers.get('ETag')
     return {'If-Match': etag} if etag else {}
 
 
-def get_response_etag(response: requests.Response):
+def get_response_etag(response: httpx.Response | requests.Response):
     etag = None
-    if response.ok:
+    if response.status_code < 400:
         etag = response.headers.get('ETag')
         if not etag:
             if get_response_media_type(response) == 'application/json':
@@ -56,7 +57,7 @@ def get_response_etag(response: requests.Response):
     return etag
 
 
-def get_extended_error(response: requests.Response):
+def get_extended_error(response: httpx.Response | requests.Response):
     message = ''
     try:
         data = response.json()
@@ -149,7 +150,7 @@ def get_sse_stream(sut):
         if sut.server_sent_event_uri:
             response = sut.session.get(sut.rhost + sut.server_sent_event_uri,
                                        stream=True)
-        if response is not None and response.ok and sut.subscriptions_uri:
+        if response is not None and response.status_code < 400 and sut.subscriptions_uri:
             # get the "after" set of EventDestination URIs
             r = sut.session.get(sut.rhost + sut.subscriptions_uri)
             if r.status_code == requests.codes.OK:

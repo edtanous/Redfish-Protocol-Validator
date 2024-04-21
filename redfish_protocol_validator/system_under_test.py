@@ -6,6 +6,7 @@
 import logging
 from urllib.parse import urlparse
 
+import httpx
 import requests
 
 from redfish_protocol_validator.utils import redfish_version_to_tuple, poll_task
@@ -13,7 +14,7 @@ from redfish_protocol_validator.constants import RequestType, Result
 
 
 class SystemUnderTest(object):
-    def __init__(self, rhost, username, password, verify=True):
+    def __init__(self, rhost, username, password, verify=True, http2=True):
         self._rhost = rhost
         self._username = username
         self._password = password
@@ -47,6 +48,7 @@ class SystemUnderTest(object):
         self._responses = {}
         self._typed_responses = {}
         self._verify = verify
+        self._http2 = http2
         self._priv_info = set()
         self._priv_info.add(password)
         self._users = {}
@@ -100,6 +102,10 @@ class SystemUnderTest(object):
     @property
     def verify(self):
         return self._verify
+
+    @property
+    def http2(self):
+        return self._http2
 
     def set_product(self, product):
         self._product = product
@@ -422,10 +428,10 @@ class SystemUnderTest(object):
         """
         Get the Sessions URI by following the the links from the ServiceRoot
 
-        :param headers: HTTP headers to pass to the GET requests
+        :param headers: HTTP headers to pass to the GET httpx
         :return: the Sessions URI
         """
-        r = requests.get(self.rhost + '/redfish/v1/', headers=headers,
+        r = httpx.get(self.rhost + '/redfish/v1/', headers=headers,
                          verify=self.verify)
         if r.status_code == requests.codes.OK:
             data = r.json()
@@ -433,7 +439,7 @@ class SystemUnderTest(object):
                 return data['Links']['Sessions']['@odata.id']
             elif 'SessionService' in data:
                 uri = data['SessionService']['@odata.id']
-                r = requests.get(self.rhost + uri, headers=headers,
+                r = httpx.get(self.rhost + uri, headers=headers,
                                  auth=(self.username, self.password),
                                  verify=self.verify)
                 if r.status_code == requests.codes.OK:
@@ -496,7 +502,7 @@ class SystemUnderTest(object):
         """
         Login to the Redfish service and establish a session
 
-        :return: the `requests.Session` object
+        :return: the `httpx.Client` object
         """
         payload = {
             'UserName': self.username,
@@ -507,10 +513,10 @@ class SystemUnderTest(object):
         }
         sessions_uri = self._get_sessions_uri(headers)
         self.set_sessions_uri(sessions_uri)
-        session = requests.Session()
-        response = requests.post(self.rhost + sessions_uri, json=payload,
-                                 headers=headers, verify=self.verify)
-        if response.ok:
+        session = httpx.Client(verify=self.verify, http2=self.http2)
+        response = httpx.post(self.rhost + sessions_uri, verify=self.verify, json=payload,
+                                 headers=headers)
+        if response.status_code < 400:
             # Redfish Session created; use it
             location = response.headers.get('Location')
             self._set_active_session_uri(location)
@@ -533,7 +539,6 @@ class SystemUnderTest(object):
         session.headers.update({'OData-Version': '4.0'})
         session.headers.update({'Accept-Encoding': 'identity'})
         # session.headers.update({'Accept': 'application/json'})
-        session.verify = self.verify
         self._set_session(session)
         return session
 
@@ -541,7 +546,7 @@ class SystemUnderTest(object):
         if self.active_session_uri:
             response = self.session.delete(
                 self.rhost + self.active_session_uri)
-            if response.ok:
+            if response.status_code < 400:
                 self._set_session(None)
                 self._set_active_session_uri(None)
                 self._set_active_session_key(None)

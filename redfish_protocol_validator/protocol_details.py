@@ -243,7 +243,7 @@ def test_media_types(sut: SystemUnderTest, uri, response):
                     Assertion.PROTO_JSON_RFC, msg)
 
     # Test Assertion.PROTO_JSON_ACCEPTED
-    if response.request.body:
+    if response.request.content:
         if response.status_code in [requests.codes.OK, requests.codes.CREATED,
                                     requests.codes.NOT_ACCEPTABLE,
                                     requests.codes.UNSUPPORTED_MEDIA_TYPE]:

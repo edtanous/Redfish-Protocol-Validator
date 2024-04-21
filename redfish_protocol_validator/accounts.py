@@ -160,7 +160,7 @@ def add_account_via_patch(sut: SystemUnderTest, session, user, role, password,
     success = response.status_code == requests.codes.OK
     if success:
         response = session.get(sut.rhost + uri)
-        if response.ok:
+        if response.status_code < 400:
             # Enable the account if it not already enabled
             data = response.json()
             if 'Enabled' in data and data['Enabled'] is False:
@@ -230,7 +230,7 @@ def patch_account(sut: SystemUnderTest, session, acct_uri,
         headers = utils.get_etag_header(sut, session, acct_uri)
         response = sut.patch(acct_uri, json=payload, headers=headers,
                              session=session)
-        if response.ok:
+        if response.status_code < 400:
             new_pwd = pwd
         sut.add_response(acct_uri, response,
                          resource_type=ResourceType.MANAGER_ACCOUNT,
@@ -261,7 +261,7 @@ def patch_account(sut: SystemUnderTest, session, acct_uri,
     headers = utils.get_etag_header(sut, session, acct_uri)
     response = sut.patch(acct_uri, json=payload, headers=headers,
                          session=session)
-    if response.ok:
+    if response.status_code < 400:
         new_pwd = pwd
     sut.add_response(acct_uri, response,
                      resource_type=ResourceType.MANAGER_ACCOUNT,
@@ -274,7 +274,7 @@ def patch_account(sut: SystemUnderTest, session, acct_uri,
         bad_headers = {'If-Match': new_headers['If-Match'] + 'foobar'}
         r = sut.patch(acct_uri, json=payload, headers=bad_headers,
                       session=session)
-        if r.ok:
+        if r.status_code < 400:
             new_pwd = pwd
         sut.add_response(acct_uri, r,
                          resource_type=ResourceType.MANAGER_ACCOUNT,
@@ -343,7 +343,7 @@ def password_change_required(sut: SystemUnderTest, session, user, password,
                              session=session)
         sut.add_response(uri, response,
                          resource_type=ResourceType.MANAGER_ACCOUNT)
-        if not response.ok:
+        if not response.status_code < 400:
             return
     # create session as new user
     payload = {
@@ -353,28 +353,29 @@ def password_change_required(sut: SystemUnderTest, session, user, password,
     headers = {
         'OData-Version': '4.0'
     }
-    response = requests.post(sut.rhost + sut.sessions_uri, json=payload,
-                             headers=headers, verify=sut.verify)
+
+    session = type(sut.session)(verify=sut.verify)
+    response = session.post(sut.rhost + sut.sessions_uri, json=payload,
+                             headers=headers)
     sut.add_response(sut.sessions_uri, response,
                      request_type=RequestType.PWD_CHANGE_REQUIRED)
     # GET the account
-    response = requests.get(sut.rhost + uri, auth=(user, password),
-                            headers=headers, verify=sut.verify)
+    response = session.get(sut.rhost + uri, auth=(user, password),
+                            headers=headers)
     etag = utils.get_response_etag(response)
     sut.add_response(uri, response, resource_type=ResourceType.MANAGER_ACCOUNT,
                      request_type=RequestType.PWD_CHANGE_REQUIRED)
     # try to get protected resource
-    response = requests.get(sut.rhost + sut.sessions_uri,
-                            auth=(user, password), headers=headers, 
-                            verify=sut.verify)
+    response = session.get(sut.rhost + sut.sessions_uri,
+                            auth=(user, password), headers=headers)
     sut.add_response(sut.sessions_uri, response,
                      request_type=RequestType.PWD_CHANGE_REQUIRED)
     # change password
     payload = {'Password': new_password(sut)}
     if etag:
         headers['If-Match'] = etag
-    response = requests.patch(sut.rhost + uri, auth=(user, password), json=payload,
-                              headers=headers, verify=sut.verify)
+    response = session.patch(sut.rhost + uri, auth=(user, password), json=payload,
+                              headers=headers)
     sut.add_response(uri, response,
                      resource_type=ResourceType.MANAGER_ACCOUNT,
                      request_type=RequestType.PWD_CHANGE_REQUIRED)

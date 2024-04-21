@@ -6,6 +6,7 @@
 import logging
 import random
 
+import httpx
 import requests
 
 from redfish_protocol_validator import accounts as acct
@@ -37,13 +38,13 @@ def find_certificates(sut: SystemUnderTest, data):
         uri = data['NetworkProtocol']['@odata.id']
         r = sut.session.get(sut.rhost + uri)
         yield {'uri': uri, 'response': r}
-        if r.ok:
+        if r.status_code < 400:
             d = r.json()
             if 'HTTPS' in d and 'Certificates' in d['HTTPS']:
                 coll_uri = d['HTTPS']['Certificates']['@odata.id']
                 r = sut.session.get(sut.rhost + coll_uri)
                 yield {'uri': coll_uri, 'response': r}
-                if r.ok:
+                if r.status_code < 400:
                     d = r.json()
                     if 'Members' in d and len(d['Members']):
                         for m in d['Members']:
@@ -98,7 +99,7 @@ def get_default_resources(sut: SystemUnderTest, uri='/redfish/v1/',
             sut.set_nav_prop_uri(prop, uri)
             r = sut.session.get(sut.rhost + uri)
             yield {'uri': uri, 'response': r}
-            if r.ok:
+            if r.status_code < 400:
                 data = r.json()
                 if 'Members' in data and len(data['Members']):
                     uri = data['Members'][0]['@odata.id']
@@ -110,14 +111,14 @@ def get_default_resources(sut: SystemUnderTest, uri='/redfish/v1/',
         sut.set_nav_prop_uri('Managers', uri)
         r = sut.session.get(sut.rhost + uri)
         yield {'uri': uri, 'response': r}
-        if r.ok:
+        if r.status_code < 400:
             data = r.json()
             if 'Members' in data and len(data['Members']):
                 for m in data['Members']:
                     uri = m['@odata.id']
                     r = sut.session.get(sut.rhost + uri)
                     yield {'uri': uri, 'response': r}
-                    if r.ok:
+                    if r.status_code < 400:
                         d = r.json()
                         set_mfr_model_fw(sut, d)
                         set_mgr_net_proto_uri(sut, d)
@@ -129,7 +130,7 @@ def get_default_resources(sut: SystemUnderTest, uri='/redfish/v1/',
         sut.set_nav_prop_uri('AccountService', uri)
         r = sut.session.get(sut.rhost + uri)
         yield {'uri': uri, 'response': r}
-        if r.ok:
+        if r.status_code < 400:
             data = r.json()
             if 'PrivilegeMap' in data:
                 uri = data['PrivilegeMap']['@odata.id']
@@ -140,7 +141,7 @@ def get_default_resources(sut: SystemUnderTest, uri='/redfish/v1/',
                     r = sut.session.get(sut.rhost + uri)
                     yield {'uri': uri, 'response': r}
                     sut.set_nav_prop_uri(prop, uri)
-                    if r.ok:
+                    if r.status_code < 400:
                         d = r.json()
                         if 'Members' in d and len(d['Members']):
                             if prop == 'Accounts':
@@ -151,7 +152,7 @@ def get_default_resources(sut: SystemUnderTest, uri='/redfish/v1/',
                                     r = sut.session.get(sut.rhost + uri)
                                     yield {'uri': uri, 'response': r,
                                            'resource_type': resource_type}
-                                    if r.ok:
+                                    if r.status_code < 400:
                                         sut.add_user(r.json())
                                         if (r.json().get('UserName')
                                                 == sut.username):
@@ -165,20 +166,20 @@ def get_default_resources(sut: SystemUnderTest, uri='/redfish/v1/',
                                     r = sut.session.get(sut.rhost + uri)
                                     yield {'uri': uri, 'response': r,
                                            'resource_type': resource_type}
-                                    if r.ok:
+                                    if r.status_code < 400:
                                         sut.add_role(r.json())
 
     if 'SessionService' in root:
         uri = root['SessionService']['@odata.id']
         r = sut.session.get(sut.rhost + uri)
         yield {'uri': uri, 'response': r}
-        if r.ok:
+        if r.status_code < 400:
             data = r.json()
             if 'Sessions' in data:
                 uri = data['Sessions']['@odata.id']
                 r = sut.session.get(sut.rhost + uri)
                 yield {'uri': uri, 'response': r}
-                if r.ok:
+                if r.status_code < 400:
                     data = r.json()
                     if 'Members' in data and len(data['Members']):
                         uri = data['Members'][0]['@odata.id']
@@ -190,7 +191,7 @@ def get_default_resources(sut: SystemUnderTest, uri='/redfish/v1/',
         sut.set_nav_prop_uri('EventService', uri)
         r = sut.session.get(sut.rhost + uri)
         yield {'uri': uri, 'response': r}
-        if r.ok:
+        if r.status_code < 400:
             data = r.json()
             if 'Subscriptions' in data:
                 sut.set_nav_prop_uri(
@@ -254,9 +255,7 @@ def patch_other_account(sut: SystemUnderTest, session, user, password):
         new_user, new_password, new_acct_uri = create_account(
             sut, session, request_type=RequestType.NORMAL)
         if new_acct_uri:
-            new_session = requests.Session()
-            new_session.auth = (user, password)
-            new_session.verify = sut.verify
+            new_session = type(session)(verify=sut.verify, http2=sut.http2, auth=(user, password))
             pwd = patch_account(sut, new_session, new_acct_uri,
                                 request_type=RequestType.MODIFY_OTHER)
             if pwd:
@@ -308,7 +307,7 @@ def data_modification_requests(sut: SystemUnderTest):
         if new_uri:
             response = sut.session.get(sut.rhost + new_uri)
             sut.add_response(new_uri, response)
-            if response.ok:
+            if response.status_code < 400:
                 etag = utils.get_response_etag(response)
                 data = response.json()
                 if 'PasswordChangeRequired' in data:
@@ -337,7 +336,7 @@ def data_modification_requests_no_auth(sut: SystemUnderTest, no_auth_session):
     if new_session_uri:
         r = sessions.delete_session(sut, no_auth_session, new_session_uri,
                                     request_type=RequestType.NO_AUTH)
-        if not r.ok:
+        if not r.status_code < 400:
             sessions.delete_session(sut, sut.session, new_session_uri,
                                     request_type=RequestType.NORMAL)
     user, password, new_acct_uri = create_account(
@@ -367,9 +366,9 @@ def basic_auth_requests(sut: SystemUnderTest):
     }
     uri = sut.sessions_uri
     # good request
-    r = requests.get(sut.rhost + uri, headers=headers,
-                     auth=(sut.username, sut.password),
-                     verify=sut.verify)
+    session = type(sut.session)(verify=sut.verify)
+    r = session.get(sut.rhost + uri, headers=headers,
+                     auth=(sut.username, sut.password))
     sut.add_response(uri, r, request_type=RequestType.BASIC_AUTH)
 
 
@@ -383,7 +382,7 @@ def http_requests(sut: SystemUnderTest):
         http_rhost = 'http' + sut.rhost[5:]
     else:
         logging.warning('Unexpected scheme (%s) for remote host %s found, '
-                        'expected http or https; skipping http requests' %
+                        'expected http or https; skipping http httpx' %
                         (sut.scheme, sut.rhost))
         return
 
@@ -400,7 +399,7 @@ def http_requests(sut: SystemUnderTest):
     elif not sut.avoid_http_redirect:
         # request using HTTP and no auth (should fail or redirect to HTTPS)
         try:
-            r = requests.get(http_rhost + uri, headers=headers,
+            r = httpx.get(http_rhost + uri, headers=headers,
                              verify=sut.verify)
             sut.add_response(uri, r, request_type=RequestType.HTTP_NO_AUTH)
         except Exception as e:
@@ -420,7 +419,7 @@ def http_requests(sut: SystemUnderTest):
     elif not sut.avoid_http_redirect:
         # request using HTTP and basic auth (should fail or redirect to HTTPS)
         try:
-            r = requests.get(http_rhost + uri, headers=headers,
+            r = httpx.get(http_rhost + uri, headers=headers,
                              auth=(sut.username, sut.password),
                              verify=sut.verify)
             sut.add_response(uri, r, request_type=RequestType.HTTP_BASIC_AUTH)
@@ -429,7 +428,7 @@ def http_requests(sut: SystemUnderTest):
             sut.set_avoid_http_redirect(True)
         # request using HTTP and no auth (should fail or redirect to HTTPS)
         try:
-            r = requests.get(http_rhost + uri, headers=headers,
+            r = httpx.get(http_rhost + uri, headers=headers,
                              verify=sut.verify)
             sut.add_response(uri, r, request_type=RequestType.HTTP_NO_AUTH)
         except Exception as e:
@@ -448,7 +447,7 @@ def bad_auth_requests(sut: SystemUnderTest):
     #       IP will be blocked for 600 seconds."
     uri = sut.sessions_uri
     h = headers.copy()
-    r = requests.get(sut.rhost + uri, headers=h,
+    r = httpx.get(sut.rhost + uri, headers=h,
                      auth=(acct.new_username(set()), acct.new_password(sut)),
                      verify=sut.verify)
     sut.add_response(uri, r, request_type=RequestType.BAD_AUTH)
@@ -458,7 +457,7 @@ def bad_auth_requests(sut: SystemUnderTest):
     uri = '/redfish/v1/RPVfoobar'
     h = headers.copy()
     h.update({'X-Auth-Token': token})
-    r = requests.get(sut.rhost + uri, headers=h, verify=sut.verify)
+    r = httpx.get(sut.rhost + uri, headers=h, verify=sut.verify)
     sut.add_response(uri, r, request_type=RequestType.BAD_AUTH)
 
 

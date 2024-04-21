@@ -6,8 +6,6 @@
 import logging
 from urllib.parse import urlparse
 
-import requests
-
 from redfish_protocol_validator import accounts
 from redfish_protocol_validator.constants import RequestType
 from redfish_protocol_validator.system_under_test import SystemUnderTest
@@ -26,8 +24,9 @@ def bad_login(sut: SystemUnderTest):
     headers = {
         'OData-Version': '4.0'
     }
-    response = requests.post(sut.rhost + sut.sessions_uri, json=payload,
-                             headers=headers, verify=sut.verify)
+    session = type(sut.session)(verify=sut.verify)
+    response = session.post(sut.rhost + sut.sessions_uri, json=payload,
+                             headers=headers)
     sut.add_response(sut.sessions_uri, response,
                      request_type=RequestType.BAD_AUTH)
 
@@ -41,9 +40,10 @@ def create_session(sut: SystemUnderTest):
         'OData-Version': '4.0',
         'Content-Type': 'application/json;charset=utf-8'
     }
-    response = requests.post(sut.rhost + sut.sessions_uri, json=payload,
-                             headers=headers, verify=sut.verify)
-    if not response.ok:
+    session = type(sut.session)(verify=sut.verify)
+    response = session.post(sut.rhost + sut.sessions_uri, json=payload,
+                             headers=headers)
+    if not response.status_code < 400:
         logging.warning('session POST status: %s, response: %s' % (
             response.status_code, response.text))
     # creating a session with NO_AUTH is also NORMAL, so register both types
@@ -53,7 +53,7 @@ def create_session(sut: SystemUnderTest):
                      request_type=RequestType.NO_AUTH)
     new_session_uri = None
     token = None
-    if response.ok:
+    if response.status_code < 400:
         location = response.headers.get('Location')
         if location:
             new_session_uri = urlparse(location).path
@@ -69,6 +69,5 @@ def delete_session(sut: SystemUnderTest, session, session_uri,
 
 
 def no_auth_session(sut: SystemUnderTest):
-    session = requests.Session()
-    session.verify = sut.verify
+    session = type(sut.session)(verify=sut.verify, http2=sut.http2)
     return session
